@@ -1,6 +1,6 @@
 """
-Telegram bot front-end for our AI agent -- now with conversation memory
-and a Binance crypto market data tool.
+Telegram bot front-end for our AI agent -- with conversation memory and
+three crypto market tools (CoinGecko).
 
 WHAT CHANGED vs the first version:
 1. CONVERSATION MEMORY -- each Telegram chat has a unique chat_id. We
@@ -11,11 +11,20 @@ WHAT CHANGED vs the first version:
    restarts, all conversations are forgotten. For a real production
    bot you'd persist this to a file or database, but for a demo (and
    most small freelance jobs) in-memory is a perfectly normal choice.
-2. NEW TOOL: get_crypto_data() -- pulls live price + 24h stats from
-   Binance's PUBLIC API (no API key needed). The system prompt
-   explicitly tells the model to report facts only, never give
-   buy/sell advice -- that's a deliberate safety choice, not a
-   limitation of the API.
+2. CRYPTO TOOLS (CoinGecko's public API, no key needed):
+   - get_crypto_data() -- live price + 24h stats for a known coin id.
+   - search_crypto() -- look up a coin's exact id by name/ticker, so
+     the bot can handle practically any coin, not just famous ones.
+   - get_trending_crypto() -- what's currently trending worldwide.
+   We started with Binance's public API but it blocks requests from
+   some regions (including Russia) with a "restricted location" error,
+   so we switched to CoinGecko, which has no such geo-restriction.
+   The system prompt explicitly tells the model to report facts only,
+   never give buy/sell advice -- that's a deliberate safety choice.
+3. RESILIENCE -- network hiccups (a slow Telegram/DeepSeek/CoinGecko
+   response) are caught with try/except around each risky call, plus
+   a global error handler, so one bad moment no longer crashes the
+   whole bot for every user.
 """
 
 import json
@@ -387,8 +396,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     ]
     await update.message.reply_text(
         "Hi! I'm an AI assistant. Ask me anything -- I can look up currency "
-        "exchange rates, crypto prices (Binance), do math, and I'll remember "
-        "our conversation. Send /reset any time to start fresh."
+        "exchange rates, crypto prices/search/trending coins (CoinGecko), do "
+        "math, and I'll remember our conversation. Send /reset any time to "
+        "start fresh."
     )
 
 
