@@ -7,9 +7,11 @@ live crypto market data added on top.
 
 ## What it can do
 
-- **Chat with memory** — remembers earlier messages in the conversation
-  (per Telegram chat), so follow-ups like "and in euros?" work naturally.
-  Send `/reset` any time to clear the history and start fresh.
+- **Chat with persistent memory** — remembers earlier messages in the
+  conversation (per Telegram chat), so follow-ups like "and in euros?"
+  work naturally. History is saved to a local SQLite database, so it
+  survives the bot restarting — not just kept in RAM. Send `/reset`
+  any time to clear the history and start fresh.
 - **Currency exchange rates** — e.g. "How much is 250 USD in RUB?"
 - **Math** — any arithmetic expression, evaluated safely by a dedicated
   tool rather than left to the model to compute itself.
@@ -57,19 +59,32 @@ Press Ctrl+C in the terminal to stop the bot.
 
 ## Notes on scope
 
-- Conversation memory lives in the bot's RAM only — it resets if the
-  bot process restarts. For a small demo or freelance job that's a
-  reasonable trade-off; a production bot would persist it to a file
-  or database instead.
+- Conversation memory is stored in a local SQLite file (`bot_database.db`,
+  created automatically on first run, listed in `.gitignore` since it's
+  data, not code) — see `db.py`. This is a solid choice for a small bot
+  or freelance job; a larger production system might use a hosted
+  database instead, but the underlying idea (persist to disk, don't
+  keep it only in RAM) is the same.
 - Network hiccups (Telegram, DeepSeek, or CoinGecko being briefly slow
   or unreachable) are caught and reported to the user rather than
   crashing the bot for everyone else.
+- The bot only runs while `python bot.py` is actively running somewhere
+  (your machine or a server) — it's not a background service by default.
+
+## Project files
+
+- `bot.py` — the bot itself: Telegram handlers, the agent loop, and
+  all the tools (currency, calculator, crypto).
+- `db.py` — the SQLite persistence layer (init/save/load/clear).
+- `test_db.py` — a small standalone script to sanity-check `db.py`
+  without needing to run the actual bot.
 
 ## Tech stack
 
 `python-telegram-bot` (Telegram Bot API wrapper), `openai` SDK pointed
 at DeepSeek's API, `requests` for exchange rate and crypto lookups,
-`python-dotenv` for safe secret loading.
+`python-dotenv` for safe secret loading, `sqlite3` (Python's built-in
+standard library) for persistent conversation storage.
 
 ## License
 

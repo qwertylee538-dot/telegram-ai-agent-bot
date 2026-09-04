@@ -25,6 +25,10 @@ WHAT CHANGED vs the first version:
    response) are caught with try/except around each risky call, plus
    a global error handler, so one bad moment no longer crashes the
    whole bot for every user.
+4. PERSISTENT MEMORY -- conversation history now lives in a SQLite
+   database file (see db.py) instead of a plain Python dict in RAM.
+   This means the bot restarting no longer wipes everyone's chat
+   history -- it's saved to disk after every turn.
 """
 
 import json
@@ -35,6 +39,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, ContextTypes, filters
+
+import db
 
 load_dotenv()
 
@@ -60,37 +66,23 @@ SYSTEM_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# CONVERSATION MEMORY
-# {chat_id: [list of message dicts]} -- one remembered conversation per
-# Telegram chat. A plain dict is enough here because the bot runs as a
-# single process; each chat_id is unique per user/group in Telegram.
+# CONVERSATION MEMORY -- now backed by SQLite (see db.py) instead of a
+# plain Python dict, so it survives bot restarts.
 # ---------------------------------------------------------------------------
-conversation_history: dict[int, list] = {}
 
-# Safety cap: how many messages we keep per conversation before trimming
-# the oldest ones. Without this, a long-running chat would keep growing
-# forever, costing more tokens (money) on every single message.
+# Safety cap: how many past messages we load per conversation. Without
+# this, a long-running chat would keep growing forever, costing more
+# tokens (money) on every single message.
 MAX_HISTORY_MESSAGES = 20
 
 
 def get_history(chat_id: int) -> list:
-    """Return this chat's message history, creating a fresh one (with
-    the system prompt) the first time we see this chat_id.
+    """Return this chat's message history as a list ready for the
+    DeepSeek API: the system prompt, followed by the most recent
+    messages loaded from the database (oldest first).
     """
-    if chat_id not in conversation_history:
-        conversation_history[chat_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    return conversation_history[chat_id]
-
-
-def trim_history(messages: list) -> list:
-    """Keep the system message plus only the most recent messages, so
-    the conversation doesn't grow (and cost more) forever.
-    """
-    if len(messages) <= MAX_HISTORY_MESSAGES:
-        return messages
-    system_message = messages[0]
-    recent_messages = messages[-(MAX_HISTORY_MESSAGES - 1):]
-    return [system_message] + recent_messages
+    past_messages = db.load_history(chat_id, limit=MAX_HISTORY_MESSAGES - 1)
+    return [{"role": "system", "content": SYSTEM_PROMPT}] + past_messages
 
 
 # ---------------------------------------------------------------------------
@@ -391,22 +383,18 @@ def run_agent(messages: list, max_iterations: int = 5) -> str:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Runs when a user sends /start."""
     # Reset this chat's memory so /start always begins a clean conversation.
-    conversation_history[update.message.chat_id] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
+    db.clear_history(update.message.chat_id)
     await update.message.reply_text(
         "Hi! I'm an AI assistant. Ask me anything -- I can look up currency "
         "exchange rates, crypto prices/search/trending coins (CoinGecko), do "
-        "math, and I'll remember our conversation. Send /reset any time to "
-        "start fresh."
+        "math, and I'll remember our conversation (even if the bot restarts). "
+        "Send /reset any time to start fresh."
     )
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Runs when a user sends /reset -- clears just this chat's memory."""
-    conversation_history[update.message.chat_id] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
+    db.clear_history(update.message.chat_id)
     await update.message.reply_text("Conversation history cleared. Fresh start!")
 
 
@@ -424,8 +412,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
+    # Load past history from the database, then add this new question.
+    # NOTE: we save the user's question to the database right away --
+    # even if something goes wrong further down, we don't lose the
+    # record that they asked it.
     messages = get_history(chat_id)
     messages.append({"role": "user", "content": user_question})
+    db.save_message(chat_id, "user", user_question)
 
     try:
         answer = run_agent(messages)
@@ -439,9 +432,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # Trim AFTER the turn completes, so we don't cut a tool call off
-    # from its matching tool result mid-turn.
-    conversation_history[chat_id] = trim_history(messages)
+    # Save the assistant's reply too, so next turn's get_history() sees
+    # this full exchange. We only persist the final text answer here
+    # (not the intermediate tool-call steps run_agent used internally)
+    # -- that's all a future turn needs to "remember" the conversation.
+    db.save_message(chat_id, "assistant", answer)
 
     try:
         await update.message.reply_text(answer)
@@ -458,6 +453,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def main() -> None:
+    # Make sure the messages table exists before we start handling
+    # any updates -- safe to call every startup, it's a no-op if the
+    # table is already there.
+    db.init_db()
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))

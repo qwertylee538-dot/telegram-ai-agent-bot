@@ -7,3 +7,8 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# SQLite database file -- this is DATA (conversation history), not code.
+# It's created automatically by db.init_db() and shouldn't be committed --
+# every environment running this bot generates its own fresh copy.
+bot_database.db
